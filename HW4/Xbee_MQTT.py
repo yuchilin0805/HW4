@@ -50,10 +50,9 @@ xbeenum=[]
 count=0
 
 while True:
-    # send RPC to remote
     s.write("/query/run\r".encode())
     line=s.read(2)
-   # print("read:")
+    print("read:")
     print(line.decode())
     xbeenum.append(line)
     count=count+1
@@ -61,14 +60,16 @@ while True:
     if count==21 :
         break
 
-print("stop")
-print(xbeenum)
-print(xbeenum[1])
+
 for i  in range(0,19):
     num[i]=xbeenum[i+1]
     print(num[i])
 num[19]=2
-plt.plot(t,num)
+ax=plt.subplot(111)
+ax.plot(t,num)
+ax.set_xlabel('time')
+ax.set_ylabel('number')
+ax.set_title('collected data plot')
 plt.show()
 
 s.close()
