@@ -27,20 +27,29 @@
 #define FXOS8700Q_M_CTRL_REG2 0x5C
 #define FXOS8700Q_WHOAMI_VAL 0xC7
 
-WiFiInterface *wifi;
+
 I2C i2c( PTD9,PTD8);
 int m_addr = FXOS8700CQ_SLAVE_ADDR1;
 volatile int message_num = 0;
 volatile int arrivedcount = 0;
 volatile bool closed = false;
 
-const char* topic = "Mbed";
+
+float x[500];
+float y[500];
+float z[500];
+float sampletime[500];
+int start_sample=0;
+int samplecount=0;
+const char* topic = "HWmbed";
 void FXOS8700CQ_readRegs(int addr, uint8_t * data, int len);
 void FXOS8700CQ_writeRegs(uint8_t * data, int len);
-
+void reply_messange(char *xbee_reply, char *messange);
 void getAcc();
 void getAddr(Arguments *in, Reply *out);
 void query(Arguments *in,Reply *out);
+void getACCval(Arguments *in,Reply *out);
+RPCFunction rpcACCv(&getACCval,"getACCval");
 RPCFunction rpcquery(&query, "query");
 
 
@@ -49,59 +58,27 @@ RawSerial xbee(D12, D11);
 
 EventQueue queue(32 * EVENTS_EVENT_SIZE);
 Thread t;
-Thread t2;
+Thread t2(osPriorityNormal, 100 * 1024 /*120K stack size*/);;
 Timer timer1;
-Thread mqtt_thread;
+Timer timer2;
+//Thread mqtt_thread(osPriorityHigh);
 EventQueue mqtt_queue;
 float ts=0.5;
 float prev_angle;
 int times=0;
 int counttime=0;
 int isasked=0;
+int flag=0;
 EventQueue queue2(32 * EVENTS_EVENT_SIZE);
 int timearr[20];
 int init_flag=0;
 float init_angle=0;
 void xbee_rx_interrupt(void);
 void xbee_rx(void);
-void reply_messange(char *xbee_reply, char *messange);
+
 void check_addr(char *xbee_reply, char *messenger);
-void messageArrived(MQTT::MessageData& md) {
-      MQTT::Message &message = md.message;
-      
-      char msg[300];
-      sprintf(msg, "Message arrived: QoS%d, retained %d, dup %d, packetID %d\r\n", message.qos, message.retained, message.dup, message.id);
-      printf(msg);
-      wait_ms(1000);
-      char payload[300];
-      sprintf(payload, "Payload %.*s\r\n", message.payloadlen, (char*)message.payload);
-      printf(payload);
-      ++arrivedcount;
-}
 
-void publish_message(MQTT::Client<MQTTNetwork, Countdown>* client) {
-
-      MQTT::Message message;
-      char buff[100];
-      sprintf(buff, "FXOS8700Q ACC: X=%1.4f Y=%1.4f Z=%1.4f");
-      message.qos = MQTT::QOS0;
-      message.retained = false;
-      message.dup = false;
-      message.payload = (void*) buff;
-      message.payloadlen = strlen(buff) + 1;
-      int rc = client->publish(topic, message);
-
-      printf("rc:  %d\r\n", rc);
-      printf("Puslish message: %s\r\n", buff);
-}
-
-void close_mqtt() {
-      closed = true;
-}
 int main(){
-    
-
-  
 
     pc.baud(9600);
     uint8_t datas[2] ;
@@ -166,85 +143,23 @@ int main(){
 
 
     ///////////////////////////////////////////////////////////
-    wifi = WiFiInterface::get_default_instance();
-    if (!wifi) {
-        printf("ERROR: No WiFiInterface found.\r\n");
-        return -1;
-    }
-
-
-    printf("\nConnecting to %s...\r\n", MBED_CONF_APP_WIFI_SSID);
-    int ret = wifi->connect(MBED_CONF_APP_WIFI_SSID, MBED_CONF_APP_WIFI_PASSWORD, NSAPI_SECURITY_WPA_WPA2);
-    if (ret != 0) {
-        printf("\nConnection error: %d\r\n", ret);
-        return -1;
-    }
-
-        NetworkInterface* net = wifi;
-    MQTTNetwork mqttNetwork(net);
-    MQTT::Client<MQTTNetwork, Countdown> client(mqttNetwork);
-
-    //TODO: revise host to your ip
-    const char* host = "192.168.43.101";
-    printf("Connecting to TCP network...\r\n");
-    int rc = mqttNetwork.connect(host, 1883);
-    if (rc != 0) {
-        printf("Connection error.");
-        return -1;
-    }
-    printf("Successfully connected!\r\n");
-    MQTTPacket_connectData data = MQTTPacket_connectData_initializer;
-    data.MQTTVersion = 3;
-    data.clientID.cstring = "Mbed";
-
-    if ((rc = client.connect(data)) != 0){
-        printf("Fail to connect MQTT\r\n");
-    }
-    if (client.subscribe(topic, MQTT::QOS0, messageArrived) != 0){
-        printf("Fail to subscribe\r\n");
-    }
-
+    
     t.start(callback(&queue, &EventQueue::dispatch_forever));
     t2.start(callback(&queue2,&EventQueue::dispatch_forever));
-    
+
     ts=0.5;
     timer1.start();
     queue2.call(getAcc);
     //queue.call(xbee_rx);
     xbee.attach(xbee_rx_interrupt, Serial::RxIrq);
 
-    int num = 0;
-    while (num != 5) {
-        client.yield(100);
-        ++num;
-    }
-    /*while (1) {
-       
-
-        
-        if (closed) break;
-        wait(0.5);
-    }*/
-    mqtt_thread.start(callback(&mqtt_queue, &EventQueue::dispatch_forever));
     
-    
-    //mqtt_queue.call_every(500,&publish_message, &client);
-   /* printf("Ready to close MQTT Network......\n");
-
-    if ((rc = client.unsubscribe(topic)) != 0) {
-        printf("Failed: rc from unsubscribe was %d\n", rc);
-    }
-    if ((rc = client.disconnect()) != 0) {
-    printf("Failed: rc from disconnect was %d\n", rc);
-    }
-
-    mqttNetwork.disconnect();
-    printf("Successfully closed!\n");*/
     return 0;
 
 
 
 }
+
 void xbee_rx_interrupt(void)
 {
   xbee.attach(NULL, Serial::RxIrq); // detach interrupt
@@ -266,8 +181,14 @@ void xbee_rx(void){
             buf[i] = pc.putc(recv);
             //buf[i] = recv;
         }
-        
+        start_sample=1;
         //pc.printf("%s",buf);
+        if(!flag){
+            timer2.start();
+            timer2.reset();
+            flag=1;
+        }
+        
         RPC::call(buf, outbuf);
 
         //pc.printf("%s\r\n", outbuf);
@@ -299,6 +220,48 @@ void check_addr(char *xbee_reply, char *messenger){
   xbee_reply[1] = '\0';
   xbee_reply[2] = '\0';
   xbee_reply[3] = '\0';
+}
+void getACCval(Arguments *in,Reply *out){
+    pc.printf("inee");
+    char tmp[3];
+    int a=sprintf(tmp,"%03d",samplecount);
+    xbee.printf("%s",tmp);
+    pc.printf("%d",samplecount);
+    //xbee.printf("")
+    for(int i=0;i<samplecount;i++){
+        
+        char outbuf[6];
+        int b=sprintf(outbuf,"%+1.3f",x[i]);
+        //pc.printf("%s\r\n",outbuf);
+        xbee.printf("%s",outbuf);
+        wait(0.2);        
+    }
+    for(int i=0;i<samplecount;i++){
+        char outbuf[6];
+        int b=sprintf(outbuf,"%+1.3f",y[i]);
+        //pc.printf("%s\r\n",outbuf);
+        xbee.printf("%s",outbuf);
+        wait(0.2);        
+    }
+    for(int i=0;i<samplecount;i++){
+        char outbuf[6];
+        int b=sprintf(outbuf,"%+1.3f",z[i]);
+        //pc.printf("%s\r\n",outbuf);
+        xbee.printf("%s",outbuf);
+        wait(0.2);        
+    }
+    for(int i=0;i<samplecount;i++){
+        char outbuf[6];
+        if(sampletime[i]/1000<10)
+            int b=sprintf(outbuf,"0%1.3f",sampletime[i]/1000);
+        else 
+            int b=sprintf(outbuf,"%1.3f",sampletime[i]/1000);
+        pc.printf("%s\r\n",outbuf);
+        xbee.printf("%s",outbuf);
+        wait(0.2);        
+    }
+
+
 }
 void getAcc() {
     
@@ -352,8 +315,23 @@ void getAcc() {
         /*if(isasked)
             times=0;
         else*/
-        
+        if(start_sample){
+            x[samplecount]=t[0];
+            y[samplecount]=t[1];
+            z[samplecount]=t[2];
+   
+            sampletime[samplecount]=timer2.read_ms();
+      
+            samplecount++;
+        }   
         times++;
+  
+        if(counttime==20){            
+            /*for(int i=0;i<samplecount;i++){
+                pc.printf("%f\r\n",sampletime[i]);
+            }*/
+            break;
+        }
         if(times>=50)
             times=0;
 
